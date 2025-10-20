@@ -1,251 +1,571 @@
-import React, { useState } from 'react';
-import {SafeAreaView,View,Text,TextInput,Button,StyleSheet,ScrollView,FlatList,ActivityIndicator,Alert,Modal,Pressable,
+// ConsultaFaturas.tsx
+import React, { useState, useEffect } from 'react'; // <-- MUDANÇA 1: Adicionado useEffect
+import {
+  StyleSheet,
+  Text,
+  View,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  Linking,
+  Alert,
+  SafeAreaView,
+  Platform,
 } from 'react-native';
-import axios from 'axios';
-import Pdf from 'react-native-pdf';
-import * as FileSystem from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
+// import { WebView } from 'react-native-webview'; // <-- MUDANÇA 2: IMPORT REMOVIDO
 
-// 🖥️ IMPORTANTE: Troque 'localhost' pelo IP local do seu computador!
-const API_BASE = 'http://192.168.1.10:3001'; // Exemplo: use o seu IP
+const API_BASE = 'http://localhost:3000';
 
-// Funções de API separadas para organização
-const apiClient = axios.create({ baseURL: API_BASE });
+interface Fatura {
+  numerofatura: string;
+  vencimentofatura: string;
+  valorfatura: string;
+  linhadigitavel: string;
+}
 
-const buscarFaturasAPI = (cpfCnpj, contrato) => {
-  return apiClient.post('/api/faturas', { cpfCnpj, contrato });
-};
+interface Message {
+  text: string;
+  type: 'ok' | 'warn' | 'err';
+}
 
-const buscarBoletoAPI = (numeroFatura) => {
-  return apiClient.post('/api/boleto', { numeroFatura });
-};
-
-const enviarBoletoEmailAPI = (email, url, numeroFatura) => {
-  return apiClient.post('/api/send-boleto', { email, url, numeroFatura });
-};
-
-
-export default function App() {
-  // --- Estados para controlar a UI ---
+// ====== COMPONENTE PRINCIPAL ======
+const ConsultaFaturas = () => {
+  // ====== ESTADO (React Hooks) ======
   const [cpfCnpj, setCpfCnpj] = useState('');
   const [contrato, setContrato] = useState('');
-  const [faturas, setFaturas] = useState([]);
-  const [numeroFaturaSelecionada, setNumeroFaturaSelecionada] = useState('');
+  const [numeroFatura, setNumeroFatura] = useState('');
+  const [emailDestino, setEmailDestino] = useState('');
+
+  const [faturas, setFaturas] = useState<Fatura[]>([]);
+  const [boletoURL, setBoletoURL] = useState<string | null>(null);
+  const [numeroSelecionado, setNumeroSelecionado] = useState<string | null>(null);
+
+  const [isLoadingFaturas, setIsLoadingFaturas] = useState(false);
+  const [isLoadingBoleto, setIsLoadingBoleto] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   
-  const [boletoUrl, setBoletoUrl] = useState(null);
-  const [pdfSource, setPdfSource] = useState(null);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [message, setMessage] = useState<Message | null>(null);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  // Controladores de visibilidade da UI
+  const [showGerarBoleto, setShowGerarBoleto] = useState(false);
+  const [showEmailInput, setShowEmailInput] = useState(false);
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
 
-  // --- Funções de Ação ---
-  const handleConsultarFaturas = async () => {
-    if (!cpfCnpj || !contrato) {
-      setError('Por favor, preencha CPF/CNPJ e Contrato.');
+  // <-- MUDANÇA 3: State e Effect para carregar a WebView dinamicamente -->
+  const [WebViewComponent, setWebViewComponent] = useState<React.ComponentType<any> | null>(null);
+
+  useEffect(() => {
+    // Se a plataforma NÃO for web, carregue o componente
+    if (Platform.OS !== 'web') {
+      const { WebView } = require('react-native-webview');
+      setWebViewComponent(() => WebView); // Armazena o componente no state
+    }
+  }, []); // Executa apenas uma vez
+  // <-- FIM DA MUDANÇA 3 -->
+
+  // ====== FUNÇÕES DA API (adaptadas para TS) ======
+  const buscarFaturasFront = async (cpf: string, contract: string): Promise<Fatura[]> => {
+    const r = await fetch(`${API_BASE}/api/faturas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpfCnpj: cpf, contrato: contract }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('Falha ao buscar faturas: ' + t);
+    }
+    const data = await r.json();
+    return Array.isArray(data?.content) ? data.content : [];
+  };
+
+  const buscarBoletoFront = async (numFatura: string): Promise<string | null> => {
+    const r = await fetch(`${API_BASE}/api/boleto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ numeroFatura: numFatura }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('Falha ao gerar boleto: ' + t);
+    }
+    const data = await r.json();
+    return data?.url || null;
+  };
+    
+  const enviarBoletoEmailFront = async (email: string, url: string, numFatura: string) => {
+    const r = await fetch(`${API_BASE}/api/send-boleto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, url, numeroFatura: numFatura }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('Falha ao enviar e-mail: ' + t);
+    }
+    return r.json().catch(() => ({}));
+  };
+
+  // ====== LÓGICA DE EVENTOS (Handlers) ======
+  const handleConsultar = async () => {
+    setMessage(null);
+    setFaturas([]);
+    setShowGerarBoleto(false);
+    setBoletoURL(null);
+
+    const cleanCpf = (cpfCnpj || '').replace(/\D/g, '');
+    const cleanContrato = (contrato || '').replace(/\D/g, '');
+
+    if (!cleanCpf || !cleanContrato) {
+      setMessage({ text: 'Informe CPF/CNPJ e contrato (somente números).', type: 'warn' });
       return;
     }
-    setLoading(true);
-    setError(null);
-    setFaturas([]);
-    setBoletoUrl(null);
 
+    setIsLoadingFaturas(true);
     try {
-      const response = await buscarFaturasAPI(cpfCnpj, contrato);
-      if (response.data.content && response.data.content.length > 0) {
-        setFaturas(response.data.content);
+      const faturasResult = await buscarFaturasFront(cleanCpf, cleanContrato);
+      if (faturasResult.length === 0) {
+        setMessage({ text: 'Nenhuma fatura pendente encontrada.', type: 'warn' });
       } else {
-        setError('Nenhuma fatura pendente encontrada.');
+        setFaturas(faturasResult);
+        setMessage({ text: 'Faturas carregadas com sucesso.', type: 'ok' });
       }
-    } catch (err) {
-      setError('Erro ao buscar faturas. Verifique os dados e a conexão.');
-      console.error(err);
+    } catch (e: any) {
+      setMessage({ text: e.message || 'Erro inesperado.', type: 'err' });
     } finally {
-      setLoading(false);
+      setIsLoadingFaturas(false);
     }
   };
 
-  const handleGerarBoleto = async (numeroFatura) => {
-    if (!numeroFatura) {
-        Alert.alert('Erro', 'Número da fatura inválido.');
-        return;
-    }
-    setLoading(true);
-    setError(null);
-    setBoletoUrl(null);
-    setNumeroFaturaSelecionada(numeroFatura);
+  const handleGerarBoleto = async () => {
+      setMessage(null);
+      setBoletoURL(null);
+      setShowEmailInput(false);
+      setShowPdfViewer(false);
 
-    try {
-      const response = await buscarBoletoAPI(numeroFatura);
-      const url = response.data.url;
-      if (url) {
-        setBoletoUrl(url);
-        Alert.alert('Sucesso', 'Link do boleto gerado! Agora você pode visualizar, baixar ou enviar por e-mail.');
-      } else {
-        setError('Não foi possível gerar o link do boleto.');
+      if (!numeroFatura.trim()) {
+          setMessage({ text: 'Digite o número da fatura.', type: 'warn' });
+          return;
       }
-    } catch (err) {
-      setError('Erro ao gerar o boleto.');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVisualizar = () => {
-    if (!boletoUrl) return;
-    // A rota /api/pdf do seu backend serve o PDF de forma segura
-    const proxiedUrl = `${API_BASE}/api/pdf?url=${encodeURIComponent(boletoUrl)}`;
-    setPdfSource({ uri: proxiedUrl, cache: true });
-    setModalVisible(true);
-  };
-  
-  const handleBaixar = async () => {
-    if (!boletoUrl) return;
-    setLoading(true);
-    try {
-        const fileName = `boleto-${numeroFaturaSelecionada}.pdf`;
-        const downloadUrl = `${API_BASE}/api/pdf-download?url=${encodeURIComponent(boletoUrl)}`;
-        const localUri = FileSystem.cacheDirectory + fileName;
-
-        const { uri } = await FileSystem.downloadAsync(downloadUrl, localUri);
-        
-        if (await Sharing.isAvailableAsync()) {
-            await Sharing.shareAsync(uri);
-        } else {
-            Alert.alert('Não disponível', 'O compartilhamento não está disponível neste dispositivo.');
-        }
-    } catch (e) {
-        Alert.alert('Erro', 'Não foi possível baixar o arquivo.');
-        console.error(e);
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const handleEnviarEmail = () => {
-    if (!boletoUrl) return;
-    Alert.prompt(
-      'Enviar por E-mail',
-      'Digite o e-mail de destino:',
-      async (email) => {
-        if (email) {
-          setLoading(true);
-          try {
-            await enviarBoletoEmailAPI(email, boletoUrl, numeroFaturaSelecionada);
-            Alert.alert('Sucesso!', 'E-mail enviado para ' + email);
-          } catch (e) {
-            Alert.alert('Erro', 'Falha ao enviar e-mail.');
-          } finally {
-            setLoading(false);
+      
+      const existe = faturas.some(f => String(f.numerofatura) === String(numeroFatura));
+      if (!existe) {
+          setMessage({ text: 'O número informado não está na lista de faturas pendentes.', type: 'warn' });
+          return;
+      }
+      
+      setIsLoadingBoleto(true);
+      try {
+          const url = await buscarBoletoFront(numeroFatura);
+          if (!url) {
+              setMessage({ text: 'Não foi possível obter a URL do boleto.', type: 'warn' });
+              return;
           }
-        }
-      },
-      'plain-text' // Tipo de input
-    );
+          setBoletoURL(url);
+          setNumeroSelecionado(numeroFatura);
+          setMessage({ text: 'Boleto gerado! Escolha uma ação abaixo.', type: 'ok' });
+      } catch (e: any) {
+          setMessage({ text: e.message || 'Erro ao gerar boleto.', type: 'err' });
+      } finally {
+          setIsLoadingBoleto(false);
+      }
   };
+    
+  const handleEnviarEmail = async () => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailDestino || !emailRegex.test(emailDestino)) {
+      Alert.alert('Atenção', 'Por favor, informe um e-mail válido.');
+      return;
+    }
+    if (!boletoURL || !numeroSelecionado) return;
+
+    setIsSendingEmail(true);
+    try {
+        await enviarBoletoEmailFront(emailDestino, boletoURL, numeroSelecionado);
+        Alert.alert('Sucesso!', 'E-mail enviado com sucesso!');
+        setShowEmailInput(false);
+        setEmailDestino('');
+    } catch (e: any) {
+        Alert.alert('Erro', e.message || 'Falha ao enviar o e-mail.');
+    } finally {
+        setIsSendingEmail(false);
+    }
+  };
+
+  // ====== HELPERS DE RENDERIZAÇÃO ======
+  const renderFaturasTable = (faturasList: Fatura[]) => (
+    <View style={styles.table}>
+      {/* Cabeçalho */}
+      <View style={[styles.tableRow, styles.tableHeader]}>
+        <Text style={[styles.tableCell, styles.headerText, { flex: 0.5 }]}>#</Text>
+        <Text style={[styles.tableCell, styles.headerText, { flex: 1.5 }]}>Número</Text>
+        <Text style={[styles.tableCell, styles.headerText, { flex: 1.5 }]}>Vencimento</Text>
+        <Text style={[styles.tableCell, styles.headerText]}>Valor</Text>
+      </View>
+      {/* Corpo */}
+      {faturasList.map((f, i) => (
+        <View style={styles.tableRow} key={f.numerofatura}>
+          <Text style={[styles.tableCell, { flex: 0.5 }]}>{i + 1}</Text>
+          <Text style={[styles.tableCell, { flex: 1.5 }]}>{f.numerofatura}</Text>
+          <Text style={[styles.tableCell, { flex: 1.5 }]}>{f.vencimentofatura}</Text>
+          <Text style={[styles.tableCell]}>{f.valorfatura}</Text>
+        </View>
+      ))}
+    </View>
+  );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Consulta de Faturas</Text>
-
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.card}>
+          <Text style={styles.h1}>🔐 Consulta de Faturas & Boleto</Text>
+          <Text style={styles.mutedSmall}>
+            Consulte suas faturas pendentes e gere o boleto de forma rápida e segura.
+          </Text>
+
+          {/* Form Identificação */}
+          <View style={styles.divider} />
+          <Text style={styles.label}>CPF/CNPJ</Text>
           <TextInput
             style={styles.input}
-            placeholder="CPF/CNPJ (só números)"
+            placeholder="Somente números"
+            placeholderTextColor={colors.muted}
             keyboardType="numeric"
             value={cpfCnpj}
             onChangeText={setCpfCnpj}
           />
+
+          <Text style={styles.label}>Nº do contrato</Text>
           <TextInput
             style={styles.input}
-            placeholder="Nº do Contrato (só números)"
+            placeholder="Somente números"
+            placeholderTextColor={colors.muted}
             keyboardType="numeric"
             value={contrato}
             onChangeText={setContrato}
           />
-          <Button title="Consultar Faturas" onPress={handleConsultarFaturas} />
-        </View>
+          
+          <TouchableOpacity style={styles.button} onPress={handleConsultar} disabled={isLoadingFaturas}>
+            {isLoadingFaturas ? (
+              <ActivityIndicator color={colors.btnText} />
+            ) : (
+              <Text style={styles.buttonText}>Consultar faturas</Text>
+            )}
+          </TouchableOpacity>
 
-        {loading && <ActivityIndicator size="large" color="#007bff" style={styles.mt} />}
-        {error && <Text style={styles.errorText}>{error}</Text>}
-
-        {faturas.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.subtitle}>Faturas Encontradas</Text>
-            <FlatList
-              data={faturas}
-              keyExtractor={(item) => item.numerofatura.toString()}
-              renderItem={({ item }) => (
-                <View style={styles.faturaItem}>
-                  <Text>Fatura: {item.numerofatura}</Text>
-                  <Text>Vencimento: {item.vencimentofatura}</Text>
-                  <Text>Valor: {item.valorfatura}</Text>
-                  <Button title="Gerar Boleto" onPress={() => handleGerarBoleto(item.numerofatura)} />
-                </View>
-              )}
-            />
-          </View>
-        )}
-
-        {boletoUrl && (
-          <View style={[styles.card, styles.actionsCard]}>
-             <Text style={styles.subtitle}>Boleto Gerado (Fatura {numeroFaturaSelecionada})</Text>
-             <View style={styles.buttonRow}>
-                <Button title="👁️ Visualizar" onPress={handleVisualizar} />
-                <Button title="⬇️ Baixar/Compartilhar" onPress={handleBaixar} />
+          {message && (
+             <View style={[styles.status, styles[`status_${message.type}`]]}>
+               <Text style={[styles.statusText, styles[`statusText_${message.type}`]]}>
+                  {message.text}
+               </Text>
              </View>
-             <Button title="✉️ Enviar por E-mail" onPress={handleEnviarEmail} />
-          </View>
-        )}
-      </ScrollView>
+          )}
 
-      {/* Modal para Visualizar o PDF */}
-      <Modal
-        animationType="slide"
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <SafeAreaView style={{ flex: 1 }}>
-            <Pressable style={styles.closeButton} onPress={() => setModalVisible(false)}>
-                <Text style={styles.closeButtonText}>Fechar</Text>
-            </Pressable>
-            <Pdf
-                trustAllCerts={false} // importante para segurança
-                source={pdfSource}
-                style={styles.pdf}
-                onLoadComplete={(numberOfPages, filePath) => {
-                    console.log(`PDF carregado com ${numberOfPages} páginas.`);
-                }}
-            />
-        </SafeAreaView>
-      </Modal>
+          {/* Lista de faturas */}
+          {faturas.length > 0 && (
+            <View style={styles.mt}>
+              <View style={styles.divider} />
+              <Text style={styles.h2}>📄 Faturas encontradas</Text>
+              {renderFaturasTable(faturas)}
+              <TouchableOpacity style={[styles.button, styles.btnPlain, styles.mt]} onPress={() => setShowGerarBoleto(true)}>
+                  <Text style={[styles.buttonText, styles.btnPlainText]}>Deseja gerar um boleto?</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Seção gerar boleto */}
+          {showGerarBoleto && (
+             <View style={styles.mt}>
+                <View style={styles.divider} />
+                <Text style={styles.h2}>🧾 Gerar boleto</Text>
+                <Text style={styles.mutedSmall}>Digite o número exato da fatura.</Text>
+                
+                <Text style={styles.label}>Número da fatura</Text>
+                <TextInput
+                    style={styles.input}
+                    placeholder="Ex.: 1362628"
+                    placeholderTextColor={colors.muted}
+                    keyboardType="numeric"
+                    value={numeroFatura}
+                    onChangeText={setNumeroFatura}
+                />
+                
+                <TouchableOpacity style={styles.button} onPress={handleGerarBoleto} disabled={isLoadingBoleto}>
+                    {isLoadingBoleto ? (
+                        <ActivityIndicator color={colors.btnText} />
+                    ) : (
+                        <Text style={styles.buttonText}>Gerar link do boleto (PDF)</Text>
+                    )}
+                </TouchableOpacity>
+
+                {/* Resultado + Ações */}
+                {boletoURL && (
+                    <View style={styles.mt}>
+                        <TouchableOpacity style={styles.linkButton} onPress={() => Linking.openURL(boletoURL)}>
+                            <Text style={styles.linkText}>Abrir/baixar boleto no navegador</Text>
+                        </TouchableOpacity>
+
+                        <View style={styles.divider} />
+                        
+                        <View style={styles.toolbar}>
+                            <TouchableOpacity style={[styles.button, styles.btnSuccess]} onPress={() => Linking.openURL(`${API_BASE}/api/pdf-download?url=${encodeURIComponent(boletoURL)}`)}>
+                                <Text style={styles.buttonText}>⬇️ Baixar</Text>
+                            </TouchableOpacity>
+                             <TouchableOpacity style={[styles.button, styles.btnWarn]} onPress={() => setShowEmailInput(!showEmailInput)}>
+                                <Text style={styles.buttonText}>✉️ E-mail</Text>
+                            </TouchableOpacity>
+                             <TouchableOpacity style={[styles.button, styles.btnView]} onPress={() => setShowPdfViewer(!showPdfViewer)}>
+                                <Text style={styles.buttonText}>👁️ Visualizar</Text>
+                            </TouchableOpacity>
+                        </View>
+                        
+                        {showEmailInput && (
+                            <View style={styles.emailBox}>
+                                <TextInput
+                                    style={[styles.input, { flex: 1 }]}
+                                    placeholder="email@dominio.com"
+                                    placeholderTextColor={colors.muted}
+                                    keyboardType="email-address"
+                                    autoCapitalize="none"
+                                    value={emailDestino}
+                                    onChangeText={setEmailDestino}
+                                />
+                                <TouchableOpacity style={[styles.button, styles.btnWarn, {marginLeft: 10}]} onPress={handleEnviarEmail} disabled={isSendingEmail}>
+                                    {isSendingEmail ? <ActivityIndicator color="#3b1d00" /> : <Text style={styles.buttonText}>Enviar</Text>}
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {/* ================= INÍCIO DA MUDANÇA 4 ================= */}
+                        {showPdfViewer && boletoURL && (
+                          <View style={styles.viewer}>
+                            {Platform.OS === 'web' ? (
+                              // Para a WEB: renderize um <iframe> HTML puro
+                              <iframe
+                                src={`${API_BASE}/api/pdf?url=${encodeURIComponent(boletoURL)}`}
+                                style={{ width: '100%', height: '100%', border: 'none' }}
+                                title="Boleto PDF"
+                              />
+                            ) : (
+                              // Para iOS e Android: use o componente do state
+                              WebViewComponent ? (
+                                <WebViewComponent
+                                  source={{ uri: `${API_BASE}/api/pdf?url=${encodeURIComponent(boletoURL)}` }}
+                                  style={{ flex: 1 }}
+                                />
+                              ) : (
+                                // Mostra um loading enquanto o componente nativo carrega
+                                <ActivityIndicator color={colors.acc} size="large" />
+                              )
+                            )}
+                          </View>
+                        )}
+                        {/* =================== FIM DA MUDANÇA 4 =================== */}
+                        
+                    </View>
+                )}
+             </View>
+          )}
+
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
-}
+};
 
-// --- Estilos ---
+// ====== ESTILOS (StyleSheet) ======
+const colors = {
+  bg: '#0f172a',
+  card: '#111827',
+  muted: '#cbd5e1',
+  ok: '#22c55e',
+  warn: '#f59e0b',
+  err: '#ef4444',
+  acc: '#38bdf8',
+  border: '#334155',
+  inputBg: '#0b1220',
+  white: '#ffffff',
+  btnPrimary: '#0ea5e9',
+  btnText: '#002133',
+  okBg: '#052e1a',
+  okBorder: '#14532d',
+  okText: '#86efac',
+  warnBg: '#3b2a03',
+  warnBorder: '#713f12',
+  warnText: '#fde68a',
+  errBg: '#3b0b0b',
+  errBorder: '#7f1d1d',
+  errText: '#fecaca',
+};
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f2f5' },
-  content: { padding: 20 },
-  card: { backgroundColor: 'white', borderRadius: 8, padding: 16, marginBottom: 16, elevation: 3 },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  subtitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 12 },
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  container: {
+    padding: 24,
+  },
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    padding: 18,
+    // Sombra para iOS e Android
+    ...Platform.select({
+        ios: {
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.25,
+            shadowRadius: 24,
+        },
+        android: {
+            elevation: 10,
+        },
+    }),
+  },
+  h1: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.white,
+    marginBottom: 8,
+  },
+  h2: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.white,
+    marginBottom: 10,
+  },
+  mutedSmall: {
+    color: colors.muted,
+    fontSize: 13,
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 14,
+    color: colors.muted,
+    marginTop: 12,
+    marginBottom: 6,
+  },
   input: {
+    width: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 5,
-    padding: 10,
-    marginBottom: 12,
+    borderColor: colors.border,
+    backgroundColor: colors.inputBg,
+    color: colors.white,
     fontSize: 16,
   },
-  errorText: { color: 'red', textAlign: 'center', marginTop: 10 },
-  faturaItem: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  actionsCard: { backgroundColor: '#e6f7ff' },
-  buttonRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 10 },
-  pdf: { flex: 1, width: '100%', height: '100%' },
-  mt: { marginTop: 16 },
-  closeButton: { padding: 10, backgroundColor: '#ddd', alignItems: 'center' },
-  closeButtonText: { fontWeight: 'bold' }
+  button: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: colors.btnPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonText: {
+    color: colors.btnText,
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  mt: {
+    marginTop: 16,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#1f2937',
+    marginVertical: 18,
+  },
+  status: {
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    borderWidth: 1,
+  },
+  statusText: {
+    fontSize: 14,
+  },
+  status_ok: { backgroundColor: colors.okBg, borderColor: colors.okBorder },
+  statusText_ok: { color: colors.okText },
+  status_warn: { backgroundColor: colors.warnBg, borderColor: colors.warnBorder },
+  statusText_warn: { color: colors.warnText },
+  status_err: { backgroundColor: colors.errBg, borderColor: colors.errBorder },
+  statusText_err: { color: colors.errText },
+  // Estilos da Tabela
+  table: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1f2937',
+  },
+  tableHeader: {
+    backgroundColor: '#1f2937',
+  },
+  tableCell: {
+    padding: 10,
+    fontSize: 14,
+    color: colors.muted,
+    flex: 1,
+  },
+  headerText: {
+    color: '#c7d2fe',
+    fontWeight: 'bold',
+  },
+  // Botões de Ação
+  btnPlain: {
+      backgroundColor: 'transparent',
+      borderWidth: 1,
+      borderColor: colors.border,
+  },
+  btnPlainText: {
+      color: colors.muted,
+  },
+  linkButton: {
+      backgroundColor: colors.okBg,
+      borderColor: colors.okBorder,
+      borderWidth: 1,
+      borderRadius: 10,
+      padding: 12,
+      alignItems: 'center',
+  },
+  linkText: {
+      color: colors.acc,
+      fontWeight: 'bold',
+      textDecorationLine: 'underline',
+  },
+  toolbar: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      marginTop: 16,
+      gap: 10,
+  },
+  btnSuccess: { backgroundColor: colors.ok },
+  btnWarn: { backgroundColor: colors.warn, color: '#3b1d00' },
+  btnView: { backgroundColor: colors.acc, color: '#02233a' },
+  emailBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 16,
+  },
+  viewer: {
+      marginTop: 14,
+      height: 500, // Altura fixa para o visualizador
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      overflow: 'hidden',
+      // Adicionado para centralizar o ActivityIndicator
+      alignItems: 'center',
+      justifyContent: 'center',
+  }
 });
+
+export default ConsultaFaturas;

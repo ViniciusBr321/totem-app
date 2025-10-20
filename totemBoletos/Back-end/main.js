@@ -26,7 +26,7 @@ const SMTP_TLS_REJECT_UNAUTHORIZED =
 const PORT = process.env.PORT || 3001;
 
 // CORS: origens autorizadas a chamar a API (use 'null' para liberar file://, '*' para liberar geral)
-const RAW_CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000')
+const RAW_CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8081')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
@@ -41,6 +41,7 @@ const DEFAULT_FRAME_ANCESTORS = [
   'http://127.0.0.1:5173',
   'http://localhost:5500',
   'http://127.0.0.1:5500',
+  'http://localhost:8081',
 ].join(' ');
 
 const FRAME_ANCESTORS = (() => {
