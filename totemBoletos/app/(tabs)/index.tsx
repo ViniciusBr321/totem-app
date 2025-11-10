@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 // import { WebView } from 'react-native-webview'; // <-- MUDANÇA 2: IMPORT REMOVIDO
 
-const API_BASE = 'http://localhost:3000';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000';
 
 interface Fatura {
   numerofatura: string;
@@ -27,6 +27,17 @@ interface Fatura {
 interface Message {
   text: string;
   type: 'ok' | 'warn' | 'err';
+}
+
+interface Pessoa {
+  documento: string | null;
+  nome: string | null;
+  tipoPessoa: 'PF' | 'PJ';
+  exige: 'dt_nasc' | 'contrato';
+  contrato?: string | null;
+  cod_pessoa?: string | null;
+  dt_nasc?: string | null;
+  carteirinha?: string | null;
 }
 
 // ====== COMPONENTE PRINCIPAL ======
@@ -51,6 +62,13 @@ const ConsultaFaturas = () => {
   const [showGerarBoleto, setShowGerarBoleto] = useState(false);
   const [showEmailInput, setShowEmailInput] = useState(false);
   const [showPdfViewer, setShowPdfViewer] = useState(false);
+
+  // Wizard de identificação → dados → faturas → boleto
+  const [step, setStep] = useState<'ident' | 'dados' | 'faturas' | 'boleto'>('ident');
+  const [pessoa, setPessoa] = useState<Pessoa | null>(null);
+  const [documento, setDocumento] = useState('');
+  const [cnpjPJ, setCnpjPJ] = useState('');
+  const [dtNasc, setDtNasc] = useState('');
 
   // <-- MUDANÇA 3: State e Effect para carregar a WebView dinamicamente -->
   const [WebViewComponent, setWebViewComponent] = useState<React.ComponentType<any> | null>(null);
@@ -104,6 +122,98 @@ const ConsultaFaturas = () => {
       throw new Error('Falha ao enviar e-mail: ' + t);
     }
     return r.json().catch(() => ({}));
+  };
+
+  const validarIdentificacaoFront = async (payload: any): Promise<Pessoa> => {
+    const r = await fetch(`${API_BASE}/api/identificacao/validar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('Falha na identificação: ' + t);
+    }
+    return r.json();
+  };
+
+  const handleValidarIdentificacao = async () => {
+    setMessage(null);
+    setFaturas([]);
+    setShowGerarBoleto(false);
+    setBoletoURL(null);
+
+    const doc = (documento || '').replace(/\D/g, '');
+    if (!doc) {
+      setMessage({ text: 'Informe CPF/CNPJ (somente números).', type: 'warn' });
+      return;
+    }
+
+    setIsLoadingFaturas(true);
+    try {
+      const dados = await validarIdentificacaoFront({ documento: doc });
+      setPessoa(dados);
+      setContrato(dados?.contrato ?? '');
+      setCnpjPJ('');
+      setDtNasc('');
+      setStep('dados');
+      setMessage({ text: 'Identificação validada. Preencha os dados complementares.', type: 'ok' });
+    } catch (e: any) {
+      setMessage({ text: e.message || 'Erro ao validar identificação.', type: 'err' });
+    } finally {
+      setIsLoadingFaturas(false);
+    }
+  };
+
+  const handleBuscarFaturas = async () => {
+    setMessage(null);
+    setFaturas([]);
+    setShowGerarBoleto(false);
+    setBoletoURL(null);
+
+    const p = pessoa;
+    if (!p) {
+      setMessage({ text: 'Valide o documento primeiro.', type: 'warn' });
+      setStep('ident');
+      return;
+    }
+
+    const contract = (contrato || '').replace(/\D/g, '');
+    let doc = '';
+    if (p.tipoPessoa === 'PJ') {
+      doc = (cnpjPJ || '').replace(/\D/g, '');
+      if (!doc) {
+        setMessage({ text: 'Informe CNPJ (somente números).', type: 'warn' });
+        return;
+      }
+    } else {
+      doc = (p.documento || '').replace(/\D/g, '');
+      if (p.exige === 'dt_nasc' && !dtNasc.trim()) {
+        setMessage({ text: 'Informe a data de nascimento.', type: 'warn' });
+        return;
+      }
+    }
+
+    if (!contract) {
+      setMessage({ text: 'Informe o número do contrato.', type: 'warn' });
+      return;
+    }
+
+    setIsLoadingFaturas(true);
+    try {
+      const faturasResult = await buscarFaturasFront(doc, contract);
+      if (faturasResult.length === 0) {
+        setMessage({ text: 'Nenhuma fatura pendente encontrada.', type: 'warn' });
+      } else {
+        setFaturas(faturasResult);
+        setStep('faturas');
+        setMessage({ text: 'Faturas carregadas com sucesso.', type: 'ok' });
+      }
+    } catch (e: any) {
+      setMessage({ text: e.message || 'Erro inesperado.', type: 'err' });
+    } finally {
+      setIsLoadingFaturas(false);
+    }
   };
 
   // ====== LÓGICA DE EVENTOS (Handlers) ======
@@ -252,6 +362,96 @@ const ConsultaFaturas = () => {
               <Text style={styles.buttonText}>Consultar faturas</Text>
             )}
           </TouchableOpacity>
+          
+          {/* Novo Wizard de Identificação e Dados */}
+          <View style={styles.divider} />
+          {step === 'ident' && (
+            <>
+              <Text style={styles.label}>CPF/CNPJ</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Somente números"
+                placeholderTextColor={colors.muted}
+                keyboardType="numeric"
+                value={documento}
+                onChangeText={setDocumento}
+              />
+              <TouchableOpacity style={styles.button} onPress={handleValidarIdentificacao} disabled={isLoadingFaturas}>
+                {isLoadingFaturas ? (
+                  <ActivityIndicator color={colors.btnText} />
+                ) : (
+                  <Text style={styles.buttonText}>Validar identificação</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
+
+          {step !== 'ident' && pessoa && (
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.mutedSmall}>
+                {`Usuário: ${pessoa.nome ?? '—'} • ${pessoa.tipoPessoa}`}
+              </Text>
+            </View>
+          )}
+
+          {step === 'dados' && pessoa && (
+            <>
+              {pessoa.tipoPessoa === 'PJ' ? (
+                <>
+                  <Text style={styles.label}>CNPJ</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Somente números"
+                    placeholderTextColor={colors.muted}
+                    keyboardType="numeric"
+                    value={cnpjPJ}
+                    onChangeText={setCnpjPJ}
+                  />
+                  <Text style={styles.label}>Nº do contrato</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Somente números"
+                    placeholderTextColor={colors.muted}
+                    keyboardType="numeric"
+                    value={contrato}
+                    onChangeText={setContrato}
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={styles.label}>Nº do contrato</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Somente números"
+                    placeholderTextColor={colors.muted}
+                    keyboardType="numeric"
+                    value={contrato}
+                    onChangeText={setContrato}
+                  />
+                  {pessoa.exige === 'dt_nasc' && (
+                    <>
+                      <Text style={styles.label}>Data de nascimento</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="DD/MM/AAAA"
+                        placeholderTextColor={colors.muted}
+                        keyboardType="default"
+                        value={dtNasc}
+                        onChangeText={setDtNasc}
+                      />
+                    </>
+                  )}
+                </>
+              )}
+              <TouchableOpacity style={styles.button} onPress={handleBuscarFaturas} disabled={isLoadingFaturas}>
+                {isLoadingFaturas ? (
+                  <ActivityIndicator color={colors.btnText} />
+                ) : (
+                  <Text style={styles.buttonText}>Buscar faturas</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
 
           {message && (
              <View style={[styles.status, styles[`status_${message.type}`]]}>
