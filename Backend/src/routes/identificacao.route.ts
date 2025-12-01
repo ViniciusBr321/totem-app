@@ -7,27 +7,31 @@ function mapTipoPessoa(t?: string): 'PF' | 'PJ' {
 }
 
 async function doLookup(documento?: string) {
-  if (!documento) return { status: 400, payload: { error: 'documento é obrigatório' } };
+  if (!documento) return { status: 400, payload: { error: 'documento Ǹ obrigat��rio' } };
 
-  const pessoa = await consultarPessoaPorDocumento(documento);
-  if (!pessoa) return { status: 404, payload: { error: 'Pessoa não encontrada' } };
+  try {
+    const pessoa = await consultarPessoaPorDocumento(documento);
+    if (!pessoa) return { status: 404, payload: { error: 'Pessoa nǜo encontrada' } };
 
-  const tipoPessoa = mapTipoPessoa(pessoa.tip_pessoa);
-  const exige = tipoPessoa === 'PF' ? 'dt_nasc' : 'contrato';
+    const tipoPessoa = mapTipoPessoa(pessoa.tip_pessoa);
+    const exige = tipoPessoa === 'PF' ? 'dt_nasc' : 'contrato';
 
-  return {
-    status: 200,
-    payload: {
-      documento,
-      nome: pessoa.nome_pessoa ?? null,
-      tipoPessoa,
-      exige, // dica pro front do totem: qual próximo campo pedir
-      contrato: pessoa.contrato ?? null,
-      cod_pessoa: pessoa.cod_pessoa ?? null,
-      dt_nasc: pessoa.dt_nasc ?? null, // pode ajudar na validação PF
-      carteirinha: pessoa.carteirinha ?? null,
-    },
-  };
+    return {
+      status: 200,
+      payload: {
+        documento,
+        nome: pessoa.nome_pessoa ?? null,
+        tipoPessoa,
+        exige, // dica pro front do totem: qual proximo campo pedir
+        contrato: pessoa.contrato ?? null,
+        cod_pessoa: pessoa.cod_pessoa ?? null,
+        dt_nasc: pessoa.dt_nasc ?? null, // pode ajudar na validacao PF
+        carteirinha: pessoa.carteirinha ?? null,
+      },
+    };
+  } catch (e: any) {
+    return { status: 502, payload: { error: e?.message || 'Falha ao consultar pessoa' } };
+  }
 }
 
 export const identificacaoRoute: FastifyPluginAsync = async (fastify) => {
@@ -50,7 +54,7 @@ export const identificacaoRoute: FastifyPluginAsync = async (fastify) => {
     try {
       const body = (request.body as any) || {};
       const pessoa = await validarNomeBenef(body);
-      if (!pessoa) return reply.code(404).send({ error: 'Pessoa não encontrada' });
+      if (!pessoa) return reply.code(404).send({ error: 'Pessoa nǜo encontrada' });
 
       const tipoPessoa = mapTipoPessoa(pessoa.tip_pessoa);
       const exige = tipoPessoa === 'PF' ? 'dt_nasc' : 'contrato';
@@ -66,7 +70,7 @@ export const identificacaoRoute: FastifyPluginAsync = async (fastify) => {
         carteirinha: pessoa?.carteirinha ?? null,
       });
     } catch (e: any) {
-      return reply.code(500).send({ error: e?.message || 'Falha na validação' });
+      return reply.code(500).send({ error: e?.message || 'Falha na validacao' });
     }
   });
 };

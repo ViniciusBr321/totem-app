@@ -35,6 +35,10 @@ JWT_SECRET: z.string().min(10).default('change-me-please'),
 
 // Endpoint Pessoas — campo do documento no payload
 PESSOAS_DOC_FIELD: z.string().default('documento'),
+MOCK_PESSOAS: z
+.string()
+.default('false')
+.transform((v) => /^(1|true|yes|sim|y)$/i.test(v.trim())),
 
 
 // SMTP
