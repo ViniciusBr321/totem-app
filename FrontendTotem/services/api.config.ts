@@ -14,7 +14,6 @@ const withPrefix = (path: string) => `${API_PREFIX}${path}`;
 export const API_CONFIG = {
   BASE_URL,
 
-  // Endpoints da API
   ENDPOINTS: {
     LOOKUP: withPrefix('/api/identificacao/lookup'),
     FATURAS: withPrefix('/api/faturas'),
@@ -30,4 +29,3 @@ export const API_CONFIG = {
 
   TIMEOUT: 30000,
 };
-

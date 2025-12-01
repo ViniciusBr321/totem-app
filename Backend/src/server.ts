@@ -12,15 +12,15 @@ import { healthRoute } from './routes/health.route';
 import { identificacaoRoute } from './routes/identificacao.route.js';
 import { pdfRoute } from './routes/pdf.route';
 
-
 async function build() {
   const app = Fastify({ logger: true });
 
+  // Plugins globais primeiro (CORS, security, mailer)
   await app.register(corsPlugin);
   await app.register(securityPlugin);
   await app.register(mailerPlugin);
 
-  // CORS fallback for any response (incl. erros/404)
+  // CORS fallback para qualquer resposta (incl. erros/404)
   app.addHook('onRequest', async (req, reply) => {
     if (req.method === 'OPTIONS') {
       const origin = (req.headers.origin as string) || '*';
@@ -44,7 +44,7 @@ async function build() {
     return payload;
   });
 
-  // Serve a SPA est?tica (index.html/app.js) para atender GET /
+  // Serve SPA estatica (index.html/app.js) para GET /
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
 
@@ -54,6 +54,7 @@ async function build() {
     wildcard: false,
   });
 
+  // Rotas
   await app.register(identificacaoRoute);
   await app.register(faturasRoute);
   await app.register(boletoRoute);
@@ -62,7 +63,6 @@ async function build() {
 
   return app;
 }
-
 
 async function start() {
   try {
@@ -76,6 +76,5 @@ async function start() {
     process.exit(1);
   }
 }
-
 
 start();
