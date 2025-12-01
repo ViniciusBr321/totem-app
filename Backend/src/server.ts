@@ -2,6 +2,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fastifyStatic from '@fastify/static';
 import { CONFIG } from './config/env';
 import { corsPlugin } from './plugins/cors';
 import { mailerPlugin } from './plugins/mailer';
@@ -19,6 +20,23 @@ async function build() {
   // Serve a SPA estática (index.html/app.js) para atender GET /
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
+
+  await app.register(fastifyStatic, {
+    root: path.join(__dirname, '..'),
+    index: ['index.html'],
+    wildcard: false,
+  });
+
+  await app.register(identificacaoRoute);
+
+  await app.register(corsPlugin);
+  await app.register(securityPlugin);
+  await app.register(mailerPlugin);
+
+  await app.register(faturasRoute);
+  await app.register(boletoRoute);
+  await app.register(pdfRoute);
+  await app.register(healthRoute);
 
   await app.register(fastifyStatic, {
     root: path.join(__dirname, '..'),
