@@ -2,4 +2,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 
 export const pdfRoute: FastifyPluginAsync = async (fastify) => {
+<<<<<<< HEAD
+=======
+  // A lógica de proxy de PDF foi movida para boleto.route.ts
+  // Este arquivo pode ser removido ou mantido vazio.
+>>>>>>> origin/master
 };

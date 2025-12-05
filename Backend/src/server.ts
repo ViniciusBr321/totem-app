@@ -15,10 +15,18 @@ import { pdfRoute } from './routes/pdf.route';
 async function build() {
   const app = Fastify({ logger: true });
 
+<<<<<<< HEAD
+=======
+  // Plugins globais primeiro (CORS, security, mailer)
+>>>>>>> origin/master
   await app.register(corsPlugin);
   await app.register(securityPlugin);
   await app.register(mailerPlugin);
 
+<<<<<<< HEAD
+=======
+  // CORS fallback para qualquer resposta (incl. erros/404)
+>>>>>>> origin/master
   app.addHook('onRequest', async (req, reply) => {
     if (req.method === 'OPTIONS') {
       const origin = (req.headers.origin as string) || '*';
@@ -42,6 +50,10 @@ async function build() {
     return payload;
   });
 
+<<<<<<< HEAD
+=======
+  // Serve SPA estatica (index.html/app.js) para GET /
+>>>>>>> origin/master
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
 
